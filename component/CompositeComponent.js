@@ -1,7 +1,18 @@
 import Component from './BaseComponent';
 import instantiateReactComponent from './instantiateReactComponent';
+import $ from 'jQuery';
 
 class CompositeComponent extends Component {
+  constructor(props) {
+    super(props);
+
+    // 组件自身实例
+    this._instance = null;
+
+    // render的组件实例
+    this._renderedComponent = null;
+  }
+
   mountComponent(rootId) {
     const { type, props } = this._vDom;
 
@@ -20,7 +31,7 @@ class CompositeComponent extends Component {
     // 调用render取到组件返回的vDom
     const typeVDom = typeInstance.render();
 
-    // 组件render中返回的vDom对象，交由instantiateReactComponent解析处理
+    // 组件render中返回的vDom对象，交由instantiateReactComponent解析处理为组件
     const renderedComponent = instantiateReactComponent(typeVDom);
     this._renderedComponent = renderedComponent;
 
@@ -37,8 +48,79 @@ class CompositeComponent extends Component {
     return renderMarkup;
   }
 
-  updateComponent(nextProps, nextState) {
+  updateComponent(newVDom, newState) {
+    const nextVDom = newVDom || this._vDom;
+    const instance = this._instance;
+    const { state } = instance;
+    // 构建新的state
+    const nextState = {
+      ...state,
+      newState,
+    };
+    const { props: nextProps } = nextVDom;
 
+    // shouldComponentUpdate生命周期的返回值可能会中断更新动作
+    if (instance.shouldComponentUpdate && instance.shouldComponentUpdate(nextProps, nextState) === false) {
+      return;
+    }
+
+    // componentWillUpdate生命周期函数的调用
+    if (instance.componentWillUpdate) {
+      instance.componentWillUpdate(nextProps, nextState);
+    }
+
+    instance.state = nextState;
+    instance.props = nextProps;
+
+    const prevComponent = this._renderedComponent;
+
+    const prevRenderVDom = prevComponent._vDom;
+    const nextRenderVDom = instance.render();
+
+    // 对比上一次render组件的虚拟DOM是否与要更新的DOM一致，
+    // 如果一致则执行更新逻辑，否则重新初始化一个新组件
+    if (shouldUpdateReactComponent(prevRenderVDom, nextRenderVDom)) {
+      // 触发render组件的更新
+      prevComponent.updateComponent(nextRenderVDom);
+      // 触发组件的componentDidUpdate生命周期
+      if (instance.componentDidUpdate) {
+        instance.componentDidUpdate();
+      }
+    }
+    else {
+
+      // 构建出新组件
+      const nextRenderComponent = instantiateReactComponent(nextRenderVDom);
+      // 取得新组件的html
+      const nextMarkup = nextRenderComponent.mountComponent(this._rootNodeId);
+      // 替换掉页面上原组件的html
+      $(`[data-reactid=${this._rootNodeId}]`).replaceWith(nextMarkup);
+
+      // 触发原组件的componentWillUnmount生命周期
+      if (prevComponent.componentWillUnmount) {
+        prevComponent.componentWillUnmount();
+      }
+      // 更新_renderedComponent指向新组件
+      this._renderedComponent = nextRenderComponent;
+    }
+
+  }
+}
+
+// 对比两个虚拟DOM节点是否一致
+function shouldUpdateReactComponent(prevVDom, nextVDom) {
+  if (prevVDom === null || nextVDom === null) {
+    return;
+  }
+
+  const prevType = typeof prevVDom;
+
+  // 判断Text或Dom类型组件
+  if (prevType === 'string' || prevType === 'number') {
+    return typeof nextVDom === prevType;
+  } else if (prevType === 'object') {
+    // 判断Composite类型组件
+    return prevVDom.type === nextVDom.type && prevVDom.key === nextVDom.key;
   }
 }
 

@@ -7,7 +7,13 @@ class TextComponent extends Component {
     return `<span data-reactid="${rootId}">${this._vDom}</span>`
   }
 
-  updateComponent() {
+  updateComponent(newVDom) {
+    const nextText = newVDom.toString();
+    if(nextText !== this._vDom){
+      this._vDom = nextText;
+    }
+
+    $(`[data-reactid="${this._rootNodeId}"]`).html(this._vDom)
   }
 }
 export default TextComponent;

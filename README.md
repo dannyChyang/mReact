@@ -1,4 +1,4 @@
-#React源码解析
+# React源码解析
 
 ### 虚拟DOM(Virtual DOM)
 了解React的都知道，其高效的原因，是因为React按照页面的DOM结构，
@@ -208,6 +208,125 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
 因此更新逻辑由CompositeComponent的updateComponent()函数中进行
 
 - CompositeComponent
-    Composite类型的
 
+    Composite类型组件的更新函数，需要处理两种流程，
+    - 当被定义在其它组件的`render`函数中时，其包裹组件会构建出新的vDom对象，根据传入新的vDom来处理更新；
+    - 当组件内部使用`setState()`触发时，根据新的state来更新；
+    
+    了解这两种方式的区别，可以帮助我们理解下面`updateComponent`函数的实现。
+    
+    ```javascript
+    class CompositeComponent extends Component {
+      constructor(props) {
+        super(props);
+        // 组件自身实例
+        this._instance = null;
+        // render的组件实例
+        this._renderedComponent = null;
+      }
+    
+      updateComponent(newVDom, newState) {
+        const nextVDom = newVDom || this._vDom;
+        const instance = this._instance;
+        const { state } = instance;
+        // 构建新的state
+        const nextState = {
+          ...state,
+          newState,
+        };
+        const { props: nextProps } = nextVDom;
+    
+        // shouldComponentUpdate生命周期的返回值可能会中断更新动作
+        if (instance.shouldComponentUpdate && instance.shouldComponentUpdate(nextProps, nextState) === false) {
+          return;
+        }
+    
+        // componentWillUpdate生命周期函数的调用
+        if (instance.componentWillUpdate) {
+          instance.componentWillUpdate(nextProps, nextState);
+        }
+    
+        instance.state = nextState;
+        instance.props = nextProps;
+    
+        const prevComponent = this._renderedComponent;
+    
+        const prevRenderVDom = prevComponent._vDom;
+        const nextRenderVDom = instance.render();
+    
+        // 对比上一次render组件的虚拟DOM是否与要更新的DOM一致，
+        // 如果一致则执行更新逻辑，否则重新初始化一个新组件
+        if (shouldUpdateReactComponent(prevRenderVDom, nextRenderVDom)) {
+          // 触发render组件的更新
+          prevComponent.updateComponent(nextRenderVDom);
+          // 触发组件的componentDidUpdate生命周期
+          if (instance.componentDidUpdate) {
+            instance.componentDidUpdate();
+          }
+        }
+        else {
+    
+          // 重新构建render组件
+          const nextRenderComponent = instantiateReactComponent(nextRenderVDom);
+          // 生成新render组件的html
+          const nextMarkup = nextRenderComponent.mountComponent(this._rootNodeId);
+          // 替换掉页面内容
+          $(`[data-reactid=${this._rootNodeId}]`).replaceWith(nextMarkup);
+    
+          // 触发原组件的componentWillUnmount生命周期
+          if (prevComponent.componentWillUnmount) {
+            prevComponent.componentWillUnmount();
+          }
+          // 更新_renderedComponent指向新组件
+          this._renderedComponent = nextRenderComponent;
+        }
+      }
+    }
+    ```
+    
+    我们梳理一下更新流程：
+    * 组件在初始化时，记录下了展示的组件实例，即`this._renderedComponent`；
+    * 在更新环节，重新render()得到新的VDom`nextRenderVDom`；
+    * 通过比对前后两个VDom的type和key，来判断是触发原来的`_renderedComponent`的`updateComponent`函数，或是重新生成新的组件
+    
+    上面使用到了`shouldUpdateReactComponent`这个比对函数，来对vDom的type和key进行比对
+    ```javascript
+    // 对比两个虚拟DOM节点是否一致
+    function shouldUpdateReactComponent(prevVDom, nextVDom) {
+      if (prevVDom === null || nextVDom === null) {
+        return;
+      }
+    
+      const prevType = typeof prevVDom;
+    
+      // 判断Text或Dom类型组件
+      if (prevType === 'string' || prevType === 'number') {
+        return typeof nextVDom === prevType;
+      } else if (prevType === 'object') {
+        // 判断Composite类型组件
+        return prevVDom.type === nextVDom.type && prevVDom.key === nextVDom.key;
+      }
+    }
+    ```
+    上面这个处理逻辑，就是React实现的diff算法的第一个规则：
+    当两个VDom节点的类型不一致时，重新构建该组件的Virtual DOM树结构
 
+- TextComponent
+    Text类型组件作为颗粒度最小的组件，更新逻辑非常简单，展示新的文本内容即可
+    ```javascript
+      class TextComponent extends Component {
+        updateComponent(newVDom) {
+          const nextText = newVDom.toString();
+          if(nextText !== this._vDom){
+            this._vDom = nextText;
+          }
+      
+          $(`[data-reactid="${this._rootNodeId}"]`).html(this._vDom)
+        }
+      }
+      export default TextComponent;
+    ```
+- DomComponent
+    在更新阶段，相对复杂的是Dom类型，diff算法也是在这里发挥效用，提升了React的渲染效率
+    
+    

@@ -1,5 +1,6 @@
 import Component from './BaseComponent';
 import instantiateReactComponent from './instantiateReactComponent';
+import $ from 'jQuery';
 
 // html Dom 类型组件
 class DomComponent extends Component {
@@ -46,7 +47,56 @@ class DomComponent extends Component {
     return `<${tagOpen.join(' ')}>${content.join('')}<${tagClose}>`;
   }
 
-  updateComponent() {
+  updateComponent(nextVDom) {
+    const lastProps = this._vDom.props;
+    const nextProps = nextVDom.props;
+    const children = nextProps.children;
+
+    this._vDom = nextVDom;
+    const jDom = $(`[data-reactid="${this._rootNodeId}"]`);
+    const passEventTypes = [];
+    // 处理属性及事件
+    Object.keys(lastProps).forEach((prop, i) => {
+      if (prop === 'children') {
+        return;
+      }
+      if (/^on([a-zA-Z])/.test(prop)) {
+        const eventType = RegExp.$1;
+        // 移除不需要的事件
+        if (nextProps[prop] !== lastProps[prop]) {
+          $(document).undelegate(`[data-reactid=${this._rootNodeId}]`, eventType, lastProps[prop]);
+        } else {
+          passEventTypes.push(eventType);
+        }
+      }
+      // 删掉新props中没有而旧props中存在的属性
+      else if (lastProps[prop] && !nextProps[prop]) {
+        jDom.remoteAttr(prop);
+      }
+    });
+    Object.keys(nextProps).forEach((prop, i) => {
+      if (prop === 'children') {
+        return;
+      }
+      if (/^on([a-zA-Z])/.test(prop)) {
+        const eventType = RegExp.$1;
+        // 为没有添加过的事件添加订阅
+        if (!passEventTypes.includes(eventType)) {
+          $(document)
+            .delegate(`[data-reactid=${this._rootNodeId}]`, `${eventType}.${this._rootNodeId}`, nextProps[prop]);
+        }
+      } else {
+        // 更新属性
+        jDom.attr(prop, nextProps[prop]);
+      }
+    });
+
+    // 处理children
+    this._updateDOMChildren(nextVDom.props.children)
+  }
+
+  _updateDOMChildren(children){
+
   }
 }
 
