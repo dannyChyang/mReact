@@ -290,6 +290,7 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
     * 通过比对前后两个VDom的type和key，来判断是触发原来的`_renderedComponent`的`updateComponent`函数，或是重新生成新的组件
     
     上面使用到了`shouldUpdateReactComponent`这个比对函数，来对vDom的type和key进行比对
+    
     ```javascript
     // 对比两个虚拟DOM节点是否一致
     function shouldUpdateReactComponent(prevVDom, nextVDom) {
@@ -308,11 +309,13 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
       }
     }
     ```
+    
     上面这个处理逻辑，就是React实现的diff算法的第一个规则：
     当两个VDom节点的类型不一致时，重新构建该组件的Virtual DOM树结构
 
 - TextComponent
     Text类型组件作为颗粒度最小的组件，更新逻辑非常简单，展示新的文本内容即可
+    
     ```javascript
       class TextComponent extends Component {
         updateComponent(newVDom) {
@@ -327,6 +330,280 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
       export default TextComponent;
     ```
 - DomComponent
-    在更新阶段，相对复杂的是Dom类型，diff算法也是在这里发挥效用，提升了React的渲染效率
+
+    因为diff算法的介入，Dom类型的处理逻辑相对复杂。
+    可以分两步来处理，第一步更新组件输出的容器DOM上面的属性；第二步处理子级DOM；
+    ```javascript
+    updateComponent(nextVDom) {
+        const lastProps = this._vDom.props;
+        const nextProps = nextVDom.props;
+        this._vDom = nextVDom;
     
+        // 处理属性
+        this._updateProperties(lastProps, nextProps);
     
+        // 处理children
+        this._updateDOMChildren(nextVDom.props.children);
+    }
+    ```
+    `_updateProperties()`函数对比新旧props，完成属性及事件的处理。
+    特别注意一下事件处理部分，需要取消掉原来DOM上面的订阅事件。
+    
+    ```javascript
+    _updateProperties(lastProps, nextProps) {
+        const jDom = $(`[data-reactid="${this._rootNodeId}"]`);
+    
+        const passEventTypes = [];
+        Object.keys(lastProps).forEach((prop, i) => {
+          if (prop === 'children') {
+            return;
+          }
+    
+          // 对于事件订阅，移除掉nextProps中不存在，及事件监听函数有变化的
+          if (/^on([a-zA-Z])/.test(prop)) {
+            const eventType = RegExp.$1;
+            if (nextProps[prop] !== lastProps[prop]) {
+              $(document)
+                .undelegate(`[data-reactid=${this._rootNodeId}]`, `${eventType}.${this._rootNodeId}`, lastProps[prop]);
+            } else {
+              // 如果前后的事件监听函数的引用一致，下面nextProps处理时跳过
+              passEventTypes.push(eventType);
+            }
+            return;
+          }
+    
+          // 移除nextProps中没有出现的旧有属性
+          if (!nextProps.hasOwnProperty(prop)) {
+            jDom.remoteAttr(prop);
+          }
+        });
+    
+        Object.keys(nextProps).forEach((prop, i) => {
+          if (prop === 'children') {
+            return;
+          }
+          if (/^on([a-zA-Z])/.test(prop)) {
+            const eventType = RegExp.$1;
+            // 为没有添加过的事件添加订阅
+            if (!passEventTypes.includes(eventType)) {
+              $(document)
+                .delegate(`[data-reactid=${this._rootNodeId}]`, `${eventType}.${this._rootNodeId}`, nextProps[prop]);
+            }
+          } else {
+            // 更新属性
+            jDom.attr(prop, nextProps[prop]);
+          }
+        });
+      }
+    ```
+    
+    `_updateDOMChildren()`用于处理children部分的更新，
+    这部分的逻辑相对复杂，也是diff算法的优化点所在。
+    
+    > 注：下面的说明中，以名称中含'children'来指代数据集合，'child'指代集合项
+    
+    1. 使用`nextChildrenVDoms`数据生成新的`nextChildrenComponent`；
+        * 在初始化阶段，`_mountComponent()`函数会将组件集合保存下来，存入实例的`_renderedChildrenComponent`属性中，
+        通过遍历该属性，可以取得childComponent实例上的_vDom；
+        
+        * 使用vDom来生成标识索引key，并以childComponent作为索引值，生成childrenComponent的Map结构；
+        （对于Compotite类型，使用vDom.key作为标识索引key；
+        对于Text和Dom类型，使用childComponent在childrenComponent中所处的索引位置作为标识索引key)
+        
+        * 使用`nextChildrenVDoms`生成新`nextChildrenComponent`的Map结构；
+        在遍历vDom集合的过程中，会使用上面的标识索引key生成规则，来进行判定，看是复用之前的组件实例触发更新，还是创建一个新的组件；
+        
+    2. 经过上面一步得到Map结构的`prevChildren`和`nextChildren`之后，
+    会使用深度遍历算法，递归地比对树结构中，相同层级和位置的两个组件，将差异点保存为特定的diff标识结构，存入diffQueue队列中；
+    
+    3. 遍历diffQueue，按照差异的类型，完成最终HTML DOM的变动；
+
+    首先是`_updateDOMChildren()`里的的定义。由于在递归组件树的节点时，存在多次触发`_updateDOMChildren()`的情况；
+    因此使用`_updateDepth`变量，在比对操作前+1，完成后-1，来判定整个树的更新是否全部完成，继而调用`_patch()`完成HTML DOM的更新；
+    
+    ```javascript
+    let _updateDepth = 0;
+    let _diffQueue = [];
+  
+    class DomComponent{
+        _updateDOMChildren(nextChildrenVDoms) {
+            this._updateDepth += 1;
+            this._diff(this._diffQueue, nextChildrenVDoms);
+            this._updateDepth -= 1;
+            
+            if (this._updateDepth === 0) {
+              this._patch(this._diffQueue);
+              this._diffQueue = [];
+            }
+        }
+      }
+    ```
+    
+    `_diff()`中实现了更新步骤中的 i 和 ii
+    
+    ```javascript
+    // 将prevChildrenComponents转换为Map结构
+    // 如果child是Text或Dom类型，使用索引值作为MapKey;如果child是Composite类型，使用_vDom.key作为MapKey
+    function flattenChildren(childrenComponent) {
+      const map = new Map();
+      childrenComponent.forEach((child, i) => {
+        const childKey = child._vDom && child._vDom.key || i.toString();
+        map.set(childKey, child);
+      });
+      return map;
+    }
+    
+    // 生成nextChildrenComponent的Map结构
+    // 遍历过程中，会比对新旧vDom是否一致，来复用之前的组件实例或者创建新组件
+    function generateComponentChildren(prevChildren, nextChildrenVDom) {
+      const nextChildren = {};
+      nextChildrenVDom = nextChildrenVDom || [];
+      nextChildrenVDom.forEach((vDom, i) => {
+        const name = vDom.key || i.toString();
+        const prevChild = prevChildren[name];
+        const prevChildVDom = prevChild._vDom;
+        if (shouldUpdateReactComponent(prevChildVDom, vDom)) {
+          prevChild.updateComponent(vDom);
+          nextChildren[name] = prevChild;
+        } else {
+          const nextChild = instantiateReactComponent(vDom);
+          nextChildren[name] = nextChild;
+        }
+      });
+      return nextChildren;
+    }
+  
+    class DomComponent{
+      // ...
+      // 比对新旧children，提取差异点并存入diffQueue中
+      _diff(diffQueue, nextChildrenVDoms) {
+        const prevChildren = flattenChildren(this._renderedChildrenComponent);
+        const nextChildren = generateComponentChildren(prevChildren, nextChildrenVDoms);
+    
+        this._renderedChildrenComponent = Object.values(nextChildren);
+    
+        // 排列顺序的游标
+        let nextIndexCursor = 0;
+        // 用于记录访问旧children中，最后面出现的child的索引，用于优化性能
+        let lastIndex = 0;
+    
+        // 比对同层级同位置上的节点，排列出新children的顺序
+        Object.keys(nextChildren).forEach(key => {
+          const prevChild = prevChildren[key];
+          const nextChild = nextChildren[key];
+    
+          if (prevChild === nextChild) {
+            // prevChild === nextChild 表示新的child组件已经存在，只需要处理位置变化
+            prevChild._mountIndex < lastIndex && diffQueue.push({
+              parentId: this._rootNodeId,
+              parentNode: $('[data-reactid=' + this._rootNodeID + ']'),
+              type: UPATE_TYPES.MOVE_EXISTING,
+              fromIndex: prevChild._mountIndex,
+              toIndex: nextIndexCursor,
+            });
+            lastIndex = Math.max(prevChild._mountIndex, lastIndex);
+          } else {
+            // prevChild有值，表示key还在使用，但组件的type变了，需要移除掉prevChild
+            if (prevChild) {
+              diffQueue.push({
+                parentId: this._rootNodeId,
+                parentNode: $('[data-reactid=' + this._rootNodeID + ']'),
+                type: UPATE_TYPES.REMOVE_NODE,
+                fromIndex: prevChild._mountIndex,
+                toIndex: null,
+              });
+              //如果以前已经渲染过了，移除掉事件监听，通过命名空间全部清空
+              if (prevChild._rootNodeID) {
+                $(document).undelegate('.' + prevChild._rootNodeID);
+              }
+            }
+    
+            // 插入新child的html
+            diffQueue.push({
+              parentId: this._rootNodeId,
+              parentNode: $('[data-reactid=' + this._rootNodeID + ']'),
+              type: UPATE_TYPES.INSERT_MARKUP,
+              fromIndex: null,
+              toIndex: nextIndexCursor,
+              markup: nextChild.mountComponent(),
+            });
+          }
+          // 更新_mountIndex的值
+          nextChild._mountIndex = nextIndexCursor;
+    
+          nextIndexCursor += 1;
+        });
+    
+        // 移除prevChildren中出现而nextChildren中没有出现的的遗留组件
+        Object.keys(prevChildren).forEach(key => {
+          if (!nextChildren.hasOwnProperty(key)) {
+            diffQueue.push({
+              parentId: this._rootNodeId,
+              parentNode: $('[data-reactid=' + this._rootNodeID + ']'),
+              type: UPATE_TYPES.REMOVE_NODE,
+              fromIndex: prevChild._mountIndex,
+              toIndex: null,
+            });
+            //如果以前已经渲染过了，移除掉事件监听，通过命名空间全部清空
+            if (prevChildren[key]._rootNodeID) {
+              $(document).undelegate('.' + prevChildren[key]._rootNodeID);
+            }
+          }
+        });
+      }
+    }
+    ```
+    值得注意的是`_diff`过程中`lastIndex`变量的作用，其记录在遍历过程中，每次访问到的prevChildrenComponent中位置最靠后的组件，
+    这是组件更新的一种排序上面的优化策略，可以参见这一篇文章当中的详细介绍：[不可思议的 react diff](https://zhuanlan.zhihu.com/p/20346379)
+    
+    在计算出`diffQueue`的差异队列后，在`_patch()`函数中完成最终HTML DOM的更新：
+    ```javascript
+    // 用于将childNode插入到指定位置
+    function insertChildAt(parentNode, childNode, index) {
+      var beforeChild = parentNode.children().get(index);
+      beforeChild ? childNode.insertBefore(beforeChild) : childNode.appendTo(parentNode);
+    }
+    
+    class CompositeComponent{
+        // ...略
+        _patch(diffQueue) {
+            diffQueue.forEach((diff) => {
+            const {type, parentNode, fromIndex, toIndex, markup} = diff;
+            
+            const lastChildJDom = parentNode.children().get(fromIndex);
+            
+            switch (type) {
+              case UPATE_TYPES.INSERT_MARKUP:
+                insertChildAt(parentNode, $(markup),toIndex);
+                break;
+              case UPATE_TYPES.MOVE_EXISTING:
+                lastChildJDom.remove();
+                insertChildAt(diff.parentNode, lastChildJDom, toIndex);
+                break;
+              default:
+              case UPATE_TYPES.REMOVE_NODE:
+                lastChildJDom.remove();
+                break;
+            }
+            });
+        }
+    }
+    ```
+    
+### 总结
+至此，我们实现了一个简易版本的React框架，完成了组件类的定义、初始化及更新；
+并且梳理了核心diff算法。
+
+下面简单做一下总结：
+- 组件分为3种类型来处理组件的初始化渲染和更新：TextComponent、DomComponent和CompositeComponent;
+- virtual Dom对象中，记录了组件类型type，唯一标识key和属性集合props；
+- 组件是由virtual Dom创建而来，vDom上的type和key用来标识组件实例的唯一性；
+- diff算法的核心，是对比新旧vDom对象，来完成部分组件实例的复用，并加入了排序优化策略。
+通过javascript大量计算的代价，来换取减少页面DOM重排的消耗，从而提高了渲染性能；
+
+
+---
+相关资料：
+
+https://github.com/Matt-Esch/virtual-dom
+https://zhuanlan.zhihu.com/p/20346379
