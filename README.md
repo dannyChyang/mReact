@@ -1,12 +1,13 @@
 # React源码解析
 
-### 虚拟DOM(Virtual DOM)
+## 虚拟DOM(Virtual DOM)
 了解React的都知道，其高效的原因，是因为React按照页面的DOM结构，
 利用Javascript在内存中构建了一套相同结构的虚拟内存树模型，这个内存模型就称为Virtual DOM。
 每当页面产生了变化，React的diff算法会先在内存模型中进行比对，提取出差异点，
-在将Virtual DOM转化为原生DOM输出时，按照差异点，只patch出有变动的部分
+在将Virtual DOM转化为原生DOM输出时，按照差异点，只patch出有变动的部分。
 
-下面是VirtualDOM节点的定义
+下面是VirtualDOM节点的定义：
+
 ```javascript
 function VDom(type, key, props) {
   this.type = type;
@@ -15,10 +16,11 @@ function VDom(type, key, props) {
 }
 ```
 
-### 入口
-一切都是从`React.render(<App/>, document.body)`开始的，所以先看React的定义
+## 入口
+一切都是从 `React.render(<App/>, document.body)` 开始的，所以先来看看 **React是怎么定义的？**
 
-其包括
+React中主要包括：
+
 - render(virtualDom, container) 
   命令式调用，一般用于应用入口，将虚拟DOM渲染在container容器中
 - createElement(name, props, children)
@@ -29,27 +31,26 @@ function VDom(type, key, props) {
 ### createElement(type, props, children)
 
 createElement()的主要作用是根据给定type创建Virtual DOM节点，JSX是它的语法糖形式；
-其type参数可以是原生的html标签名（如：div、tag等），也可以是React组件类或函数
+其type参数可以是原生的html标签名（如：div、tag等），也可以是React组件类或函数。
 
 ---
-### 组件的实现
+## 组件的实现
 
 React的所有组件，按照类型可以分为三种：
 - 文本展示类型 (TextComponent)
 - 原生DOM类型 (DomComponent)
 - 自定义类型 (CompositeComponent)
 
-每种类型的组件，都需要处理**初始化**和**更新**两种逻辑，对应下面声明的两个函数
-- `mountComponent(rootNodeId)` 处理初始化逻辑
-- `updateComponent()` 处理更新逻辑
+每种类型的组件，都需要处理**初始化**和**更新**两种逻辑，具体会在下面两个函数中实现：
+- `mountComponent(rootNodeId)` 用于处理初始化逻辑
+- `updateComponent()` 用于处理更新逻辑
 
-#### 初始化mountComponent()的实现
-下面从初始化开始，实现不同类型组件的初始化渲染逻辑
+### 初始化mountComponent()的实现
     
-> `mountComponent()`的实现思路是，根据其vDom对象生成html代码并返回。下面是各个组件实现的`mountComponent()`逻辑
+> `mountComponent()` 的实现思路是，**根据virtual Dom对象生成HTML代码并返回。**
 
+首先定义类型组件的基类 `Component` ，它只是简单地记录了传入的virtualDom对象，并初始化了组件节点ID。
 
-首先定义类型组件的基类`Component`，它只是简单地定义了传入的VDom实例，并初始化了组件ID
 ```javascript
 class Component{
   constructor(vDom){
@@ -59,19 +60,25 @@ class Component{
 }
 ```
 
+下面是不同类型组件初始化渲染逻辑的各自实现。
+
 - TextComponent
 
-    Text组件类作为纯展示类型，只需要将要展示的内容包装放入标签并返回就可以了
+作为纯展示类型组件，TextComponent 只是简单地将需要展示的内容，使用标签包装并返回就可以了。
                  
 ```javascript
-mountComponent(rootId){
-     this._rootNodeId = rootId;
-     return `<span data-reactid="${rootId}">${this._vDom}</span>`
+class TextComponent extends Component {
+  mountComponent(rootId) {
+    this._rootNodeId = rootId;
+    return `<span data-reactid="${rootId}">${this._vDom}</span>`
+  }
 }
 ```
  
 - DomComponent
-    DOM类型在处理原生DOM时，需要注意`原生事件`的处理
+
+  DomComponent类型在处理原生DOM时，需要额外注意一下 `原生事件部分` 的处理。
+
  ```javascript
 class DomComponent extends Component {
   constructor(props) {
@@ -120,24 +127,27 @@ class DomComponent extends Component {
 ```
 
 - CompositeComponent
-    实现Composite类型的渲染逻辑之前，先看一下React组件的定义语法
+
+  在实现CompositeComponent类型的初始化渲染逻辑之前，先看一下React组件的定义语法。
+
 ```javascript
 import React from 'react'
 
 class App extends React.Component {
   render() {
     return (
+      <div>Hello word.</div>
     )
   }
 }
 ```
-App继承自React.Component，所以我们首先来实现`Component`这个类
-> 注意这里的`React.Component`不要与上面的`Component`混淆，
-前者作为组件的基类，用于定义自定义组件类型，
-而后者是逻辑基类，用于处理前者的渲染逻辑；
+声明语法中，App继承自React.Component，所以我们先来实现`Component`这个类。
+
+> 这里的 `React.Component` 不要与上面的 `Component` 混淆，
+`Component` 是不同组件类型的基类，抽象了组件渲染与更新；而`React.Component`则是Composite这种类型组件声明时的基类。
 
 
-在React.Component中，声明了所有组件都会使用到的`props`属性，以及用于触发更新的`setState()`函数
+在 `React.Component` 中，简单地声明了控制数据流向的`props`属性，以及组件实例内部用于触发更新的`setState()`函数。
 
 ```javascript
 class Component {
@@ -150,10 +160,12 @@ class Component {
   }
 }
 ```
-了解React.Component的定义之后，我们回到CompositeComponent的mountComponent()实现上来，
 
-首先要了解的是，在composite类型组件中，vDom对象中的type属性，就是组件类的定义引用，
-因此在mountComponent()函数要做的工作，**就是使用vDom的props属性来创建一个type的实例**
+在了解了 `React.Component` 的定义之后，我们回到 `CompositeComponent` ，开始实现`mountComponent()`的逻辑。
+
+首先要了解的是，在composite类型组件中，vDom对象中的type，指向的是组件类的定义，
+因此 `mountComponent()` 函数要做的工作，就是**使用vDom的props属性来创建一个type的实例**。
+
 ```javascript
 class CompositeComponent extends Component {
   mountComponent(rootId) {
@@ -193,19 +205,17 @@ class CompositeComponent extends Component {
 }
 ```
 
-> 思考一下，在JSX语法中，解释器碰到<MyInput/>标签后，就会去查找MyInput的定义，
-然后调用React.createElement(MyInput)，此时形参type接收到的是MyInput这个类或方法，
-因此在mountComponent()中可以使用new type()构造出MyInput的实例
+> 思考一下，在JSX语法中，解析器碰到 `<MyInput/>` 标签后，就会去查找到 `MyInput` 的定义，上面说过JSX只是createElement的语法糖，因此背后调用的是 `React.createElement(MyInput)` 。在React规范中，可以使用类或函数来声明组件，因此在 `mountComponent()` 中使用 `new type()` ，就可以构造出MyInput的实例了。
 
 ---
 
-#### 更新updateComponent()的实现
-实现完组件的**初始化**之后，接下来要实现组件的更新逻辑
+## 更新流程updateComponent()的实现
 
-React开放了setState()用于组件更新，回顾上面`React.Component`中`setState()`的定义， 
-实际上是调用了`this._reactInternalInstance.updateComponent(null, newState)`函数，
-组件实例this上的_reactInternalInstance属性，是Composite类型组件mountComponent()阶段定义的，
-因此更新逻辑由CompositeComponent的updateComponent()函数中进行
+实现完组件的**初始化**之后，接下来要实现组件的更新逻辑。
+
+React开放了 `setState()` 用于组件更新，回顾上面 `React.Component` 中 `setState()` 的定义， 
+实际调用的是 `this._reactInternalInstance.updateComponent(null, newState)` 这个函数。而
+`this._reactInternalInstance`指向`CompositeComponent`，困此更新逻辑交回`CompositeComponent.updateComponent()`来完成。
 
 - CompositeComponent
 
@@ -285,11 +295,11 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
     ```
     
     我们梳理一下更新流程：
-    * 组件在初始化时，记录下了展示的组件实例，即`this._renderedComponent`；
+    * 组件在初始化时，记录下了render组件的实例，即`this._renderedComponent`；
     * 在更新环节，重新render()得到新的VDom`nextRenderVDom`；
-    * 通过比对前后两个VDom的type和key，来判断是触发原来的`_renderedComponent`的`updateComponent`函数，或是重新生成新的组件
+    * 通过比对前后两个VDom的type和key，来判断是执行原来`_renderedComponent`的`updateComponent`函数，还是重新生成新的组件；
     
-    上面使用到了`shouldUpdateReactComponent`这个比对函数，来对vDom的type和key进行比对
+    上面使用到了`shouldUpdateReactComponent`这个比对函数，来对vDom的type和key进行比对，其实现如下：
     
     ```javascript
     // 对比两个虚拟DOM节点是否一致
@@ -310,11 +320,11 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
     }
     ```
     
-    上面这个处理逻辑，就是React实现的diff算法的第一个规则：
-    当两个VDom节点的类型不一致时，重新构建该组件的Virtual DOM树结构
+    上面这个处理逻辑，就是diff算法的第一个规则：
+    **当两个VDom节点的类型不一致时，重新构建该组件的Virtual DOM树结构。**
 
 - TextComponent
-    Text类型组件作为颗粒度最小的组件，更新逻辑非常简单，展示新的文本内容即可
+    Text类型组件作为颗粒度最小的组件，更新逻辑非常简单，展示新的文本内容即可。
     
     ```javascript
       class TextComponent extends Component {
@@ -329,10 +339,12 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
       }
       export default TextComponent;
     ```
+
 - DomComponent
 
     因为diff算法的介入，Dom类型的处理逻辑相对复杂。
-    可以分两步来处理，第一步更新组件输出的容器DOM上面的属性；第二步处理子级DOM；
+    可以分两步来处理，第一步更新组件输出的容器DOM上面的属性；第二步处理子级DOM。
+
     ```javascript
     updateComponent(nextVDom) {
         const lastProps = this._vDom.props;
@@ -346,8 +358,9 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
         this._updateDOMChildren(nextVDom.props.children);
     }
     ```
+
     `_updateProperties()`函数对比新旧props，完成属性及事件的处理。
-    特别注意一下事件处理部分，需要取消掉原来DOM上面的订阅事件。
+    特别注意一下事件处理部分，需要注销掉原来DOM上注册的事件。
     
     ```javascript
     _updateProperties(lastProps, nextProps) {
@@ -397,13 +410,13 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
       }
     ```
     
-    `_updateDOMChildren()`用于处理children部分的更新，
+    `_updateDOMChildren()` 用于处理children部分的更新，
     这部分的逻辑相对复杂，也是diff算法的优化点所在。
     
-    > 注：下面的说明中，以名称中含'children'来指代数据集合，'child'指代集合项
+    > 注：下面的说明中，以名称中含'children'来标识 `集合`，'child'指代 `集合项`。
     
-    1. 使用`nextChildrenVDoms`数据生成新的`nextChildrenComponent`；
-        * 在初始化阶段，`_mountComponent()`函数会将组件集合保存下来，存入实例的`_renderedChildrenComponent`属性中，
+    1. 使用 `nextChildrenVDoms` 数据生成新的`nextChildrenComponent`；
+        * DomComponent在初始化流程中，`_mountComponent()`函数会将组件集合保存下来，存入实例的`_renderedChildrenComponent`属性中，
         通过遍历该属性，可以取得childComponent实例上的_vDom；
         
         * 使用vDom来生成标识索引key，并以childComponent作为索引值，生成childrenComponent的Map结构；
@@ -439,7 +452,7 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
       }
     ```
     
-    `_diff()`中实现了更新步骤中的 i 和 ii
+  下面的`_diff()`中，实现了更新步骤中的 1 和 2。
     
     ```javascript
     // 将prevChildrenComponents转换为Map结构
@@ -553,10 +566,12 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
       }
     }
     ```
+
     值得注意的是`_diff`过程中`lastIndex`变量的作用，其记录在遍历过程中，每次访问到的prevChildrenComponent中位置最靠后的组件，
     这是组件更新的一种排序上面的优化策略，可以参见这一篇文章当中的详细介绍：[不可思议的 react diff](https://zhuanlan.zhihu.com/p/20346379)
     
     在计算出`diffQueue`的差异队列后，在`_patch()`函数中完成最终HTML DOM的更新：
+
     ```javascript
     // 用于将childNode插入到指定位置
     function insertChildAt(parentNode, childNode, index) {
@@ -590,13 +605,13 @@ React开放了setState()用于组件更新，回顾上面`React.Component`中`se
     }
     ```
     
-### 总结
+## 总结
 至此，我们实现了一个简易版本的React框架，完成了组件类的定义、初始化及更新；
 并且梳理了核心diff算法。
 
 下面简单做一下总结：
 - 组件分为3种类型来处理组件的初始化渲染和更新：TextComponent、DomComponent和CompositeComponent;
-- virtual Dom对象中，记录了组件类型type，唯一标识key和属性集合props；
+- virtualDom对象中，记录了组件类型type，唯一标识key和属性集合props；
 - 组件是由virtual Dom创建而来，vDom上的type和key用来标识组件实例的唯一性；
 - diff算法的核心，是对比新旧vDom对象，来完成部分组件实例的复用，并加入了排序优化策略。
 通过javascript大量计算的代价，来换取减少页面DOM重排的消耗，从而提高了渲染性能；
